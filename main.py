@@ -1,54 +1,121 @@
-from fastapi import HTTPException
-from fastapi import FastAPI
-from pydantic import BaseModel, Field
-from uuid import UUID
+from fastapi import FastAPI, HTTPException, Depends, status
+from pydantic import BaseModel
+from typing import Annotated
+import models
+from database import engine, SessionLocal
+from sqlalchemy.orm import Session
 
 app = FastAPI()
+models.Base.metadata.create_all(bind=engine)
 
-class Book(BaseModel):
-    id: UUID
-    author: str = Field(min_length=1)
-    title: str = Field(min_length=1)
-    description: str = Field(min_length=1, max_length=100)
-    rating: int = Field(gt=-1, lt=101)
+class PostBase(BaseModel):
+    title: str
+    content: str
+    user_id: int
 
-BOOKS = []
+class UserBase(BaseModel):
+    username:str
 
-@app.get('/')
-def read_api():
-    return BOOKS
 
-Books = []
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
-@app.post('/')
-def create_api(book: Book):
-    BOOKS.append(book)
-    return book
+db_dependency = Annotated[Session, Depends(get_db)]
 
-@app.delete('/{book_id}')
-def delete_book(book_id: UUID):
-    counter = 0
+@app.post('/user/', status_code=status.HTTP_201_CREATED)
+async def create_user(user: UserBase, db: db_dependency):
+    db_user = models.User(**user.dict())
+    db.add(db_user)
+    db.commit()
+    db.refresh(db_user)
+    return db_user
 
-    for x in BOOKS:
-        counter += 1
-        if x.id == book_id:
-            del BOOKS[counter - 1]
-            return f"deleted book of id: {book_id}"
-    raise HTTPException(
-        status_code=404,
-        detail=f"couldn't find {book_id}"
-    )
+@app.get('/user/', status_code=status.HTTP_200_OK)
+async def get_users(db:db_dependency):
+    user = db.query(models.User).all()
+    if user is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No New Users"
+        )
+    return user
 
-@app.put('/{book_id}')
-def update_book(book_id: UUID, book: Book):
-    counter = 0
+@app.get('/user/{user_id}', status_code=status.HTTP_200_OK)
+async def get_users(user_id: int, db: db_dependency):
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if user is None:
+        raise HTTPException(
+            status_code=404, 
+            detail=f"User of ID {user_id} not found"
+        )
+    return user
 
-    for x in BOOKS:
-        counter += 1
-        if x.id == book_id:
-            BOOKS[counter - 1 ] = book
-            return BOOKS[counter - 1]
-    raise HTTPException(
-        status_code = 404,
-        detail=f"Book of {book_id} updated successfully"
-    )
+@app.post('/post/', status_code=status.HTTP_201_CREATED)
+async def create_post(post: PostBase, db: db_dependency):
+    db_post = models.Post(**post.dict())
+    db.add(db_post)
+    db.commit()
+    db.refresh(db_post)
+    return db_post
+
+@app.get('/post', status_code=status.HTTP_200_OK)
+async def read_post(db: db_dependency):
+    post = db.query(models.Post).all()
+    if post is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No Newer Posts"
+        )
+    return post
+
+@app.get('/post/{user_id}', status_code=status.HTTP_200_OK)
+async def get_post(user_id: int, db:db_dependency):
+    post = db.query(models.Post).filter(models.Post.id == user_id).first()
+    if post is None:
+        raise HTTPException(
+            status_code= 404, 
+            detail=f"No ID found for {user_id}"
+        )
+    return post
+
+@app.get('/user/post/{user_id}', status_code=status.HTTP_200_OK)
+async def get_user_post(user_id: int, db: db_dependency):
+    jointData = db.query(models.Post).filter(models.Post.user_id == user_id).all() 
+
+    if not jointData:  
+        raise HTTPException(
+            status_code=404, 
+            detail="Posts not found"
+        )
+
+    return jointData
+
+@app.delete('/user/{user_id}', status_code=status.HTTP_200_OK)
+async def delete_user(user_id:int, db:db_dependency):
+    db_user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not db_user:
+        raise HTTPException(
+            status_code=404, 
+            detail=f"User Id {user_id} not found"
+        )
+    db.delete(db_user)
+    db.commit()
+
+    return {f"message: User ID {user_id} deleted successfully"}
+
+@app.delete('/post/{post_id}', status_code=status.HTTP_200_OK)
+async def delete_post(post_id: int, db:db_dependency):
+    post = db.query(models.Post).filter(models.Post.id == post_id).first()
+    if post is None:
+        raise HTTPException(
+            status_code=404, 
+            detail=f"Post with Post ID: {post_id} not found"
+        )
+    db.delete(post)
+    db.commit()
+
+    return {"message: post delete successfully"}
